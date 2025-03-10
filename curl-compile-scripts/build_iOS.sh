@@ -33,23 +33,32 @@ fi
 
 git apply ../patches/patch_curl_fixes1172.diff
 
-export CC="$XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+# export CC="$XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
 DESTDIR="$SCRIPTPATH/../prebuilt-with-ssl/iOS"
 
-export IPHONEOS_DEPLOYMENT_TARGET="10"
-ARCHS=(armv7 armv7s arm64 i386 x86_64)
-HOSTS=(armv7 armv7s arm i386 x86_64)
-PLATFORMS=(iPhoneOS iPhoneOS iPhoneOS iPhoneSimulator iPhoneSimulator)
-SDK=(iPhoneOS iPhoneOS iPhoneOS iPhoneSimulator iPhoneSimulator)
+export IPHONEOS_DEPLOYMENT_TARGET="12"
+ARCHS=(arm64 arm64 x86_64)
+HOSTS=(arm arm64 x86_64)
+PLATFORMS=(iPhoneOS iPhoneSimulator iPhoneSimulator)
+SDK=(iphoneos iphonesimulator iphonesimulator)
 
 #Build for all the architectures
 for (( i=0; i<${#ARCHS[@]}; i++ )); do
 	ARCH=${ARCHS[$i]}
-	export CFLAGS="-arch $ARCH -pipe -Os -gdwarf-2 -isysroot $XCODE/Platforms/${PLATFORMS[$i]}.platform/Developer/SDKs/${SDK[$i]}.sdk -miphoneos-version-min=${IPHONEOS_DEPLOYMENT_TARGET} -fembed-bitcode -Werror=partial-availability"
-	export LDFLAGS="-arch $ARCH -isysroot $XCODE/Platforms/${PLATFORMS[$i]}.platform/Developer/SDKs/${SDK[$i]}.sdk"
-	if [ "${PLATFORMS[$i]}" = "iPhoneSimulator" ]; then
-		export CPPFLAGS="-D__IPHONE_OS_VERSION_MIN_REQUIRED=${IPHONEOS_DEPLOYMENT_TARGET%%.*}0000"
+	PLATFORM=${PLATFORMS[$i]}
+	SYSROOT=$(xcrun --sdk ${SDK[$i]} --show-sdk-path)
+	TARGET="$ARCH-apple-ios"
+	BITCODE_FLAGS="-fembed-bitcode"
+
+	if [ "$PLATFORM" = "iPhoneSimulator" ]; then
+		BITCODE_FLAGS=""
+		TARGET="$TARGET-simulator"
+		export CPPFLAGS="-isysroot ${SYSROOT} -D__IPHONE_OS_VERSION_MIN_REQUIRED=${IPHONEOS_DEPLOYMENT_TARGET%%.*}0000"
 	fi
+
+	export CFLAGS="-target $TARGET -arch $ARCH -pipe -Os -gdwarf-2 -isysroot ${SYSROOT} -miphoneos-version-min=${IPHONEOS_DEPLOYMENT_TARGET} $BITCODE_FLAGS -Werror=partial-availability"
+	export LDFLAGS="-arch $ARCH -isysroot ${SYSROOT}"
+
 	cd "$CURLPATH"
 	./configure	--host="${HOSTS[$i]}-apple-darwin" \
 			--with-darwinssl \
@@ -72,18 +81,30 @@ for (( i=0; i<${#ARCHS[@]}; i++ )); do
 		cd "$PWD"
 		exit $EXITCODE
 	fi
-	mkdir -p "$DESTDIR/$ARCH"
-	cp "$CURLPATH/lib/.libs/libcurl.a" "$DESTDIR/$ARCH/"
-	cp "$CURLPATH/lib/.libs/libcurl.a" "$DESTDIR/libcurl-$ARCH.a"
+
+	LIB_DESTDIR=$DESTDIR/${PLATFORM}_${ARCH}
+	mkdir -p "$LIB_DESTDIR"
+	cp "$CURLPATH/lib/.libs/libcurl.a" "$LIB_DESTDIR/"
+
 	make clean
 done
 
 git checkout $CURLPATH
 
-#Build a single static lib with all the archs in it
+#Build universal libraries
 cd "$DESTDIR"
-lipo -create -output libcurl.a libcurl-*.a
-rm libcurl-*.a
+
+mkdir -p ios
+lipo -create iPhoneOS_*/libcurl.a -output ios/libcurl.a
+
+mkdir -p simulator
+lipo -create iPhoneSimulator_*/libcurl.a -output simulator/libcurl.a
+
+mkdir -p dev
+lipo -create iPhoneOS_*/libcurl.a iPhoneSimulator_x86_64/libcurl.a -output dev/libcurl.a
+
+# mkdir -p apple-silicon
+# lipo -create iPhoneOS_*/libcurl.a iPhoneSimulator_arm64/libcurl.a -output apple-silicon/libcurl.a
 
 #Copying cURL headers
 if [ -d "$DESTDIR/include" ]; then
